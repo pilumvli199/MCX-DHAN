@@ -1,4 +1,15 @@
-"""
+def main():
+    """Main execution function"""
+    
+    # Load credentials from environment or config
+    CLIENT_ID = os.getenv('DHAN_CLIENT_ID', 'YOUR_CLIENT_ID')
+    ACCESS_TOKEN = os.getenv('DHAN_ACCESS_TOKEN', 'YOUR_ACCESS_TOKEN')
+    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
+    
+    if CLIENT_ID == 'YOUR_CLIENT_ID' or ACCESS_TOKEN == 'YOUR_ACCESS_TOKEN':
+        print("=" * 60)
+        print("MCX Trading System - DhanHQ API")"""
 MCX Trading System using DhanHQ API
 Complete system for MCX commodity trading with data fetching and analysis
 """
@@ -12,6 +23,7 @@ from dhanhq import dhanhq
 import time
 import logging
 from typing import Dict, List, Optional
+from telegram_alerts import TelegramAlert
 
 # Configure logging
 logging.basicConfig(
@@ -43,17 +55,29 @@ class MCXTradingSystem:
     # Exchange ID for MCX
     MCX = dhanhq.MCX
     
-    def __init__(self, client_id: str, access_token: str):
+    def __init__(self, client_id: str, access_token: str, 
+                 telegram_bot_token: str = None, telegram_chat_id: str = None):
         """
         Initialize MCX Trading System
         
         Args:
             client_id: DhanHQ client ID
             access_token: DhanHQ access token
+            telegram_bot_token: Telegram bot token (optional)
+            telegram_chat_id: Telegram chat ID (optional)
         """
         self.client_id = client_id
         self.access_token = access_token
         self.dhan = dhanhq(client_id, access_token)
+        
+        # Initialize Telegram alerts
+        self.telegram = None
+        if telegram_bot_token and telegram_chat_id:
+            self.telegram = TelegramAlert(telegram_bot_token, telegram_chat_id)
+            logger.info("Telegram alerts enabled")
+        else:
+            logger.info("Telegram alerts disabled")
+        
         logger.info("MCX Trading System initialized")
         
         # Verify connection
@@ -296,7 +320,7 @@ class MCXTradingSystem:
             else:
                 overall_signal = 'HOLD'
             
-            return {
+            result = {
                 'signal': overall_signal,
                 'indicators': {
                     'price': latest['close'],
@@ -308,16 +332,19 @@ class MCXTradingSystem:
                 },
                 'signals': signals
             }
+            
+            return result
         except Exception as e:
             logger.error(f"Error generating signals: {e}")
             return {'signal': 'HOLD', 'error': str(e)}
     
-    def analyze_commodity(self, symbol: str) -> Dict:
+    def analyze_commodity(self, symbol: str, send_alert: bool = True) -> Dict:
         """
         Complete analysis for a commodity
         
         Args:
             symbol: Commodity symbol
+            send_alert: Send Telegram alert if enabled
         
         Returns:
             Complete analysis dictionary
@@ -345,6 +372,14 @@ class MCXTradingSystem:
                 'analysis': signals,
                 'data_points': len(df)
             }
+            
+            # Send Telegram alert if enabled and signal is not HOLD
+            if send_alert and self.telegram and signals['signal'] != 'HOLD':
+                self.telegram.send_trade_signal(
+                    symbol,
+                    signals['signal'],
+                    signals['indicators'] | {'signals': signals['signals']}
+                )
             
             return analysis
         else:
