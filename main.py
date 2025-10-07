@@ -12,10 +12,9 @@ import requests
 from dhanhq import dhanhq
 from datetime import datetime
 import threading
-
-# ==================== CONFIGURATION ====================
 import os
 
+# ==================== CONFIGURATION ====================
 # DhanHQ API Credentials (Environment variables la priority)
 DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "YOUR_DHAN_CLIENT_ID")
 DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "YOUR_DHAN_ACCESS_TOKEN")
@@ -120,19 +119,25 @@ def fetch_ltp_data():
     success_count = 0
     
     try:
-        # Fetch each commodity individually using get_ltp_data or intraday_minute_data
-        for security_id, commodity_name in MCX_COMMODITIES.items():
-            try:
-                # DhanHQ correct method: get_ltp_data (not ltp_data)
-                response = dhan.get_ltp_data(
-                    exchange_segment=dhan.MCX,
-                    security_id=str(security_id)
-                )
+        # Prepare securities dictionary for batch fetch
+        # Format: {"MCX": [security_id1, security_id2, ...]}
+        securities = {
+            "MCX": list(MCX_COMMODITIES.keys())
+        }
+        
+        # Fetch LTP data using ticker_data (for LTP) or ohlc_data (for OHLC + LTP)
+        response = dhan.ticker_data(securities=securities)
+        
+        if response and 'data' in response and 'MCX' in response['data']:
+            mcx_data = response['data']['MCX']
+            
+            for security_id, commodity_name in MCX_COMMODITIES.items():
+                # Find data for this security_id
+                security_data = mcx_data.get(str(security_id))
                 
-                if response and 'data' in response:
-                    data = response['data']
-                    ltp = float(data.get('LTP', 0))
-                    prev_close = float(data.get('prev_close', 0))
+                if security_data:
+                    ltp = float(security_data.get('LTP', 0))
+                    prev_close = float(security_data.get('prev_close', 0))
                     
                     if ltp > 0:
                         # Calculate change
@@ -160,16 +165,12 @@ def fetch_ltp_data():
                         print(f"{emoji} {commodity_name:15s}: {format_price(ltp):12s} | Change: {change_text:8s}")
                         success_count += 1
                     else:
-                        print(f"⚠️ {commodity_name:15s}: No valid LTP")
+                        print(f"⚪ {commodity_name:15s}: No LTP data")
                 else:
-                    print(f"⚠️ {commodity_name:15s}: No data in response")
-                    
-            except Exception as e:
-                print(f"⚠️ {commodity_name:15s}: Error - {str(e)}")
-                message_lines.append(f"⚠️ <b>{commodity_name}</b>: Data not available")
-            
-            # Small delay to avoid rate limiting
-            time.sleep(0.1)
+                    print(f"⚠️ {commodity_name:15s}: Not found in response")
+        else:
+            print("⚠️ No MCX data in response")
+            print(f"Response: {response}")
         
         # Send to Telegram if we got at least some data
         if success_count > 0:
@@ -188,6 +189,7 @@ def fetch_ltp_data():
     except Exception as e:
         error_msg = f"❌ Error fetching LTP data: {str(e)}"
         print(error_msg)
+        print(f"Full error details: {repr(e)}")
         send_telegram_message(error_msg)
 
 def send_startup_message():
