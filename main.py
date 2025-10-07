@@ -14,13 +14,15 @@ from datetime import datetime
 import threading
 
 # ==================== CONFIGURATION ====================
-# DhanHQ API Credentials
-DHAN_CLIENT_ID = "YOUR_DHAN_CLIENT_ID"  # Tumcha DhanHQ Client ID
-DHAN_ACCESS_TOKEN = "YOUR_DHAN_ACCESS_TOKEN"  # Tumcha Access Token
+import os
 
-# Telegram Bot Configuration
-TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # BotFather pasun milel
-TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"  # Tumcha Chat ID
+# DhanHQ API Credentials (Environment variables la priority)
+DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "YOUR_DHAN_CLIENT_ID")
+DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "YOUR_DHAN_ACCESS_TOKEN")
+
+# Telegram Bot Configuration (Environment variables la priority)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 
 # MCX Commodity Security IDs (Latest Expiry)
 MCX_COMMODITIES = {
