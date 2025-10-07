@@ -123,8 +123,8 @@ def fetch_ltp_data():
         # Fetch each commodity individually using get_ltp_data or intraday_minute_data
         for security_id, commodity_name in MCX_COMMODITIES.items():
             try:
-                # Method 1: Try using ltp_data
-                response = dhan.ltp_data(
+                # DhanHQ correct method: get_ltp_data (not ltp_data)
+                response = dhan.get_ltp_data(
                     exchange_segment=dhan.MCX,
                     security_id=str(security_id)
                 )
