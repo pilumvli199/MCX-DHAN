@@ -1,6 +1,7 @@
 """
 MCX Trading System using DhanHQ API (v2.0.2) with Telegram Alerts
 Complete system for MCX commodity trading with data fetching and analysis
+DEBUGGED VERSION - Fixed all issues
 """
 
 import os
@@ -12,7 +13,16 @@ from dhanhq import dhanhq
 import time
 import logging
 from typing import Dict, List, Optional
-from telegram_alerts import TelegramAlert
+
+# Try to import Telegram alerts - make it optional
+try:
+    from telegram_alerts import TelegramAlert
+    TELEGRAM_AVAILABLE = True
+except ImportError:
+    TELEGRAM_AVAILABLE = False
+    print("⚠️  Warning: telegram_alerts module not found. Telegram features will be disabled.")
+    print("   Install: pip install requests")
+    print("   And ensure telegram_alerts.py is in the same directory.\n")
 
 # Configure logging
 logging.basicConfig(
@@ -54,11 +64,18 @@ class MCXTradingSystem:
         """
         self.client_id = client_id
         self.access_token = access_token
-        self.dhan = dhanhq(client_id, access_token)
+        
+        # Initialize DhanHQ
+        try:
+            self.dhan = dhanhq(client_id, access_token)
+            logger.info("✓ DhanHQ client initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize DhanHQ: {e}")
+            raise
         
         # Initialize Telegram alerts
         self.telegram = None
-        if telegram_bot_token and telegram_chat_id:
+        if TELEGRAM_AVAILABLE and telegram_bot_token and telegram_chat_id:
             try:
                 self.telegram = TelegramAlert(telegram_bot_token, telegram_chat_id)
                 logger.info("✓ Telegram alerts enabled")
@@ -66,7 +83,10 @@ class MCXTradingSystem:
                 logger.warning(f"⚠ Telegram initialization failed: {e}")
                 logger.info("Continuing without Telegram alerts...")
         else:
-            logger.info("Telegram alerts disabled (no credentials provided)")
+            if not TELEGRAM_AVAILABLE:
+                logger.info("Telegram module not available")
+            else:
+                logger.info("Telegram alerts disabled (no credentials provided)")
         
         logger.info("MCX Trading System initialized with dhanhq v2.0.2")
         
@@ -77,13 +97,17 @@ class MCXTradingSystem:
         """Verify API connection and token validity"""
         try:
             # In v2.0.2, use get_fund_limits() to verify connection
+            logger.info("Verifying connection to DhanHQ...")
             funds = self.dhan.get_fund_limits()
             if funds:
                 logger.info("✓ Connected successfully to DhanHQ API")
                 return True
         except Exception as e:
             logger.error(f"❌ Connection verification failed: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Error details: {str(e)}")
             logger.warning("Please ensure your CLIENT_ID and ACCESS_TOKEN are correct")
+            logger.warning("Visit: https://web.dhan.co > My Profile > Access DhanHQ APIs")
             raise
     
     def get_ltp(self, symbol: str) -> Optional[float]:
@@ -100,9 +124,11 @@ class MCXTradingSystem:
             security_id = self.COMMODITIES.get(symbol.upper())
             if not security_id:
                 logger.error(f"Invalid symbol: {symbol}")
+                logger.info(f"Available symbols: {', '.join(self.COMMODITIES.keys())}")
                 return None
             
             # Updated for v2.0.2 - MCX exchange segment
+            logger.info(f"Fetching LTP for {symbol} (ID: {security_id})...")
             response = self.dhan.get_ltp_data(
                 exchange_segment=dhanhq.MCX,
                 security_id=str(security_id)
@@ -110,11 +136,17 @@ class MCXTradingSystem:
             
             if response and 'data' in response:
                 ltp = response['data'].get('LTP')
-                logger.info(f"{symbol} LTP: ₹{ltp}")
-                return ltp
+                if ltp:
+                    logger.info(f"✓ {symbol} LTP: ₹{ltp}")
+                    return ltp
+                else:
+                    logger.warning(f"No LTP data in response for {symbol}")
+            else:
+                logger.warning(f"Invalid response format for {symbol}: {response}")
             return None
         except Exception as e:
-            logger.error(f"Error fetching LTP for {symbol}: {e}")
+            logger.error(f"❌ Error fetching LTP for {symbol}: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
             return None
     
     def get_market_quote(self, symbol: str) -> Optional[Dict]:
@@ -133,6 +165,7 @@ class MCXTradingSystem:
                 logger.error(f"Invalid symbol: {symbol}")
                 return None
             
+            logger.info(f"Fetching market quote for {symbol}...")
             response = self.dhan.marketfeed_data(
                 exchange_segment=dhanhq.MCX,
                 security_id=str(security_id)
@@ -140,13 +173,15 @@ class MCXTradingSystem:
             
             if response and 'data' in response:
                 quote = response['data']
-                logger.info(f"{symbol} Quote - LTP: {quote.get('LTP')}, "
+                logger.info(f"✓ {symbol} Quote - LTP: {quote.get('LTP')}, "
                            f"Open: {quote.get('open')}, High: {quote.get('high')}, "
                            f"Low: {quote.get('low')}, Close: {quote.get('prev_close')}")
                 return quote
+            else:
+                logger.warning(f"Invalid quote response for {symbol}")
             return None
         except Exception as e:
-            logger.error(f"Error fetching quote for {symbol}: {e}")
+            logger.error(f"❌ Error fetching quote for {symbol}: {e}")
             return None
     
     def get_historical_data(self, symbol: str, interval: str = 'D', 
@@ -176,7 +211,10 @@ class MCXTradingSystem:
             if not from_date:
                 from_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
             
+            logger.info(f"Fetching historical data for {symbol} ({interval} interval, {from_date} to {to_date})...")
+            
             # Fetch historical data based on interval
+            response = None
             if interval == 'D':
                 # Daily data
                 response = self.dhan.historical_daily_data(
@@ -200,11 +238,16 @@ class MCXTradingSystem:
                 if not df.empty:
                     df['timestamp'] = pd.to_datetime(df['timestamp'])
                     df = df.sort_values('timestamp')
-                    logger.info(f"Fetched {len(df)} candles for {symbol}")
+                    logger.info(f"✓ Fetched {len(df)} candles for {symbol}")
                     return df
+                else:
+                    logger.warning(f"Empty dataframe received for {symbol}")
+            else:
+                logger.warning(f"Invalid historical data response for {symbol}")
             return None
         except Exception as e:
-            logger.error(f"Error fetching historical data for {symbol}: {e}")
+            logger.error(f"❌ Error fetching historical data for {symbol}: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
             return None
     
     def calculate_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -218,30 +261,37 @@ class MCXTradingSystem:
             DataFrame with added indicators
         """
         try:
+            if df is None or df.empty:
+                logger.warning("Cannot calculate indicators - empty dataframe")
+                return df
+            
+            logger.info("Calculating technical indicators...")
+            
             # Simple Moving Averages
-            df['SMA_10'] = df['close'].rolling(window=10).mean()
-            df['SMA_20'] = df['close'].rolling(window=20).mean()
-            df['SMA_50'] = df['close'].rolling(window=50).mean()
+            df['SMA_10'] = df['close'].rolling(window=10, min_periods=1).mean()
+            df['SMA_20'] = df['close'].rolling(window=20, min_periods=1).mean()
+            df['SMA_50'] = df['close'].rolling(window=50, min_periods=1).mean()
             
             # Exponential Moving Averages
-            df['EMA_12'] = df['close'].ewm(span=12, adjust=False).mean()
-            df['EMA_26'] = df['close'].ewm(span=26, adjust=False).mean()
+            df['EMA_12'] = df['close'].ewm(span=12, adjust=False, min_periods=1).mean()
+            df['EMA_26'] = df['close'].ewm(span=26, adjust=False, min_periods=1).mean()
             
             # MACD
             df['MACD'] = df['EMA_12'] - df['EMA_26']
-            df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+            df['Signal'] = df['MACD'].ewm(span=9, adjust=False, min_periods=1).mean()
             df['MACD_Histogram'] = df['MACD'] - df['Signal']
             
             # RSI (Relative Strength Index)
             delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
+            gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
+            rs = gain / loss.replace(0, np.nan)
             df['RSI'] = 100 - (100 / (1 + rs))
+            df['RSI'] = df['RSI'].fillna(50)  # Fill NaN with neutral value
             
             # Bollinger Bands
-            df['BB_Middle'] = df['close'].rolling(window=20).mean()
-            bb_std = df['close'].rolling(window=20).std()
+            df['BB_Middle'] = df['close'].rolling(window=20, min_periods=1).mean()
+            bb_std = df['close'].rolling(window=20, min_periods=1).std()
             df['BB_Upper'] = df['BB_Middle'] + (bb_std * 2)
             df['BB_Lower'] = df['BB_Middle'] - (bb_std * 2)
             
@@ -250,16 +300,18 @@ class MCXTradingSystem:
             high_close = np.abs(df['high'] - df['close'].shift())
             low_close = np.abs(df['low'] - df['close'].shift())
             ranges = pd.concat([high_low, high_close, low_close], axis=1)
-            true_range = np.max(ranges, axis=1)
-            df['ATR'] = true_range.rolling(14).mean()
+            true_range = ranges.max(axis=1)
+            df['ATR'] = true_range.rolling(14, min_periods=1).mean()
             
             # Volume Moving Average
-            df['Volume_SMA'] = df['volume'].rolling(window=20).mean()
+            if 'volume' in df.columns:
+                df['Volume_SMA'] = df['volume'].rolling(window=20, min_periods=1).mean()
             
-            logger.info("Technical indicators calculated successfully")
+            logger.info("✓ Technical indicators calculated successfully")
             return df
         except Exception as e:
-            logger.error(f"Error calculating indicators: {e}")
+            logger.error(f"❌ Error calculating indicators: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
             return df
     
     def generate_signals(self, df: pd.DataFrame) -> Dict:
@@ -273,11 +325,27 @@ class MCXTradingSystem:
             Dictionary with signals and analysis
         """
         try:
-            if df.empty or len(df) < 50:
+            if df is None or df.empty or len(df) < 20:
+                logger.warning("Insufficient data for signal generation")
                 return {'signal': 'HOLD', 'reason': 'Insufficient data'}
             
             latest = df.iloc[-1]
             signals = []
+            
+            # Check if all required columns exist
+            required_cols = ['SMA_10', 'SMA_20', 'MACD', 'Signal', 'MACD_Histogram', 
+                           'RSI', 'close', 'BB_Lower', 'BB_Upper']
+            missing_cols = [col for col in required_cols if col not in df.columns or pd.isna(latest[col])]
+            
+            if missing_cols:
+                logger.warning(f"Missing or NaN indicators: {missing_cols}")
+                return {
+                    'signal': 'HOLD',
+                    'reason': f'Missing indicators: {missing_cols}',
+                    'indicators': {
+                        'price': latest.get('close', 0),
+                    }
+                }
             
             # Moving Average Crossover
             if latest['SMA_10'] > latest['SMA_20']:
@@ -304,12 +372,12 @@ class MCXTradingSystem:
                 signals.append('Near Upper Band: Potential reversal')
             
             # Determine overall signal
-            bullish = sum(1 for s in signals if 'Bullish' in s or 'Oversold' in s)
-            bearish = sum(1 for s in signals if 'Bearish' in s or 'Overbought' in s)
+            bullish = sum(1 for s in signals if 'Bullish' in s or 'Oversold' in s or 'bounce' in s)
+            bearish = sum(1 for s in signals if 'Bearish' in s or 'Overbought' in s or 'reversal' in s)
             
-            if bullish > bearish:
+            if bullish > bearish and bullish >= 2:
                 overall_signal = 'BUY'
-            elif bearish > bullish:
+            elif bearish > bullish and bearish >= 2:
                 overall_signal = 'SELL'
             else:
                 overall_signal = 'HOLD'
@@ -317,19 +385,23 @@ class MCXTradingSystem:
             result = {
                 'signal': overall_signal,
                 'indicators': {
-                    'price': latest['close'],
-                    'SMA_10': round(latest['SMA_10'], 2),
-                    'SMA_20': round(latest['SMA_20'], 2),
-                    'RSI': round(latest['RSI'], 2),
-                    'MACD': round(latest['MACD'], 4),
-                    'ATR': round(latest['ATR'], 2)
+                    'price': float(latest['close']),
+                    'SMA_10': round(float(latest['SMA_10']), 2),
+                    'SMA_20': round(float(latest['SMA_20']), 2),
+                    'RSI': round(float(latest['RSI']), 2),
+                    'MACD': round(float(latest['MACD']), 4),
+                    'ATR': round(float(latest['ATR']), 2)
                 },
-                'signals': signals
+                'signals': signals,
+                'bullish_count': bullish,
+                'bearish_count': bearish
             }
             
+            logger.info(f"✓ Signal generated: {overall_signal} (Bullish: {bullish}, Bearish: {bearish})")
             return result
         except Exception as e:
-            logger.error(f"Error generating signals: {e}")
+            logger.error(f"❌ Error generating signals: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
             return {'signal': 'HOLD', 'error': str(e)}
     
     def analyze_commodity(self, symbol: str, send_alert: bool = True) -> Dict:
@@ -343,7 +415,7 @@ class MCXTradingSystem:
         Returns:
             Complete analysis dictionary
         """
-        logger.info(f"Analyzing {symbol}...")
+        logger.info(f"🔍 Analyzing {symbol}...")
         
         # Get current market data
         quote = self.get_market_quote(symbol)
@@ -383,10 +455,13 @@ class MCXTradingSystem:
                 except Exception as e:
                     logger.error(f"Failed to send Telegram alert: {e}")
             
+            logger.info(f"✓ Analysis completed for {symbol}")
             return analysis
         else:
+            logger.warning(f"Unable to complete analysis for {symbol} - no historical data")
             return {
                 'symbol': symbol,
+                'timestamp': datetime.now().isoformat(),
                 'error': 'Unable to fetch historical data'
             }
     
@@ -405,33 +480,45 @@ class MCXTradingSystem:
         
         for symbol in self.COMMODITIES.keys():
             try:
+                logger.info(f"\n{'='*60}")
                 analysis = self.analyze_commodity(symbol, send_alert=send_alerts)
                 results.append(analysis)
                 time.sleep(1)  # Rate limiting
             except Exception as e:
-                logger.error(f"Error analyzing {symbol}: {e}")
+                logger.error(f"❌ Error analyzing {symbol}: {e}")
+                results.append({
+                    'symbol': symbol,
+                    'error': str(e)
+                })
         
+        logger.info(f"\n{'='*60}")
         logger.info(f"✓ Scan completed. Analyzed {len(results)} commodities")
         return results
     
     def get_positions(self) -> List[Dict]:
         """Get current positions"""
         try:
+            logger.info("Fetching current positions...")
             positions = self.dhan.get_positions()
-            logger.info(f"Retrieved {len(positions.get('data', []))} positions")
-            return positions.get('data', [])
+            if positions and 'data' in positions:
+                logger.info(f"✓ Retrieved {len(positions['data'])} positions")
+                return positions['data']
+            else:
+                logger.info("No positions found")
+                return []
         except Exception as e:
-            logger.error(f"Error fetching positions: {e}")
+            logger.error(f"❌ Error fetching positions: {e}")
             return []
     
     def get_fund_limits(self) -> Dict:
         """Get fund limits and available margin"""
         try:
+            logger.info("Fetching fund limits...")
             funds = self.dhan.get_fund_limits()
-            logger.info("Retrieved fund limits")
+            logger.info("✓ Retrieved fund limits")
             return funds
         except Exception as e:
-            logger.error(f"Error fetching fund limits: {e}")
+            logger.error(f"❌ Error fetching fund limits: {e}")
             return {}
     
     def save_analysis(self, analysis: Dict, filename: str = None):
@@ -448,9 +535,9 @@ class MCXTradingSystem:
         try:
             with open(filename, 'w') as f:
                 json.dump(analysis, f, indent=2, default=str)
-            logger.info(f"Analysis saved to {filename}")
+            logger.info(f"✓ Analysis saved to {filename}")
         except Exception as e:
-            logger.error(f"Error saving analysis: {e}")
+            logger.error(f"❌ Error saving analysis: {e}")
 
 
 def main():
@@ -463,11 +550,11 @@ def main():
     TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
     
     if CLIENT_ID == 'YOUR_CLIENT_ID' or ACCESS_TOKEN == 'YOUR_ACCESS_TOKEN':
-        print("=" * 60)
+        print("\n" + "=" * 60)
         print("MCX Trading System - DhanHQ API v2.0.2")
         print("=" * 60)
         print("\n❌ Please set your credentials:")
-        print("1. Set environment variables:")
+        print("\n1. Set environment variables:")
         print("   export DHAN_CLIENT_ID='your_client_id'")
         print("   export DHAN_ACCESS_TOKEN='your_access_token'")
         print("\n2. Optional - For Telegram alerts:")
@@ -478,11 +565,15 @@ def main():
         print("   - Go to: My Profile > Access DhanHQ APIs")
         print("   - Telegram: Chat with @BotFather to create bot")
         print("   - Get Chat ID from @userinfobot")
-        print("=" * 60)
+        print("=" * 60 + "\n")
         return
     
     try:
         # Initialize trading system
+        print("\n" + "=" * 60)
+        print("Initializing MCX Trading System...")
+        print("=" * 60 + "\n")
+        
         system = MCXTradingSystem(
             CLIENT_ID, 
             ACCESS_TOKEN,
@@ -610,6 +701,9 @@ def main():
         logger.info("Program interrupted by user")
     except Exception as e:
         logger.error(f"❌ Error in main: {e}")
+        logger.error(f"Error type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Traceback:\n{traceback.format_exc()}")
         raise
 
 
