@@ -4,14 +4,14 @@ Fetches Last Traded Price (LTP) of MCX commodities every 1 minute
 Sends alerts to Telegram
 
 Requirements:
-pip install dhanhq requests schedule
+pip install dhanhq requests
 """
 
 import time
-import schedule
 import requests
 from dhanhq import dhanhq
 from datetime import datetime
+import threading
 
 # ==================== CONFIGURATION ====================
 # DhanHQ API Credentials
@@ -48,9 +48,13 @@ MCX_COMMODITIES = {
     477172: "ZINCMINI",
 }
 
+# Update interval in seconds (60 seconds = 1 minute)
+UPDATE_INTERVAL = 60
+
 # ==================== GLOBAL VARIABLES ====================
 dhan = None
 previous_prices = {}
+bot_running = True
 
 # ==================== FUNCTIONS ====================
 
@@ -191,13 +195,29 @@ def send_startup_message():
     send_telegram_message(message)
     print(message.replace('<b>', '').replace('</b>', ''))
 
+def run_scheduler():
+    """Run the scheduler loop"""
+    global bot_running
+    
+    while bot_running:
+        try:
+            fetch_ltp_data()
+            # Sleep for UPDATE_INTERVAL seconds
+            print(f"\n💤 Waiting {UPDATE_INTERVAL} seconds for next update...")
+            time.sleep(UPDATE_INTERVAL)
+        except Exception as e:
+            print(f"❌ Error in scheduler: {e}")
+            time.sleep(10)  # Wait 10 seconds before retrying
+
 def main():
     """Main function"""
+    global bot_running
+    
     print("\n" + "="*60)
     print("🚀 MCX COMMODITIES LTP TRACKER BOT")
     print("="*60)
     print(f"📊 Tracking {len(MCX_COMMODITIES)} commodities")
-    print(f"⏱️  Update interval: Every 1 minute")
+    print(f"⏱️  Update interval: Every {UPDATE_INTERVAL} seconds")
     print("="*60 + "\n")
     
     # Initialize DhanHQ
@@ -208,23 +228,21 @@ def main():
     # Send startup notification
     send_startup_message()
     
-    # Fetch initial data immediately
-    print("📥 Fetching initial data...")
-    fetch_ltp_data()
-    
-    # Schedule to run every 1 minute
-    schedule.every(1).minutes.do(fetch_ltp_data)
-    
     print("\n✅ Bot is running! Press Ctrl+C to stop.\n")
     
-    # Keep the bot running
+    # Start the scheduler in a separate thread
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+    
+    # Keep the main thread running
     try:
         while True:
-            schedule.run_pending()
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n\n🛑 Bot stopped by user")
+        bot_running = False
         send_telegram_message("🛑 <b>MCX LTP Tracker Bot Stopped</b>")
+        print("👋 Goodbye!")
 
 if __name__ == "__main__":
     main()
