@@ -119,9 +119,9 @@ def fetch_ltp_data():
     
     try:
         # Fetch LTP data from DhanHQ
-        response = dhan.get_ltp_data(
+        response = dhan.marketfeed_ltp(
             exchange_segment=dhan.MCX,
-            security_id=security_ids
+            security_id_list=security_ids
         )
         
         if response and 'data' in response:
@@ -130,13 +130,16 @@ def fetch_ltp_data():
             for security_id, commodity_name in MCX_COMMODITIES.items():
                 # Find matching data
                 commodity_data = next(
-                    (item for item in ltp_data if item.get('security_id') == security_id),
+                    (item for item in ltp_data if str(item.get('security_id')) == str(security_id)),
                     None
                 )
                 
                 if commodity_data:
-                    ltp = commodity_data.get('LTP', 0)
-                    prev_close = commodity_data.get('prev_close', 0)
+                    ltp = float(commodity_data.get('LTP', 0))
+                    prev_close = float(commodity_data.get('prev_close', 0))
+                    open_price = float(commodity_data.get('open', 0))
+                    high_price = float(commodity_data.get('high', 0))
+                    low_price = float(commodity_data.get('low', 0))
                     
                     # Calculate change
                     prev_ltp = previous_prices.get(security_id, ltp)
