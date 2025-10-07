@@ -82,7 +82,7 @@ def send_telegram_message(message):
         if response.status_code == 200:
             return True
         else:
-            print(f"⚠️ Telegram API Error: {response.status_code}")
+            print(f"⚠️ Telegram API Error: {response.status_code} - {response.text}")
             return False
     except Exception as e:
         print(f"❌ Error sending Telegram message: {e}")
@@ -115,72 +115,74 @@ def fetch_ltp_data():
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     ]
     
-    security_ids = list(MCX_COMMODITIES.keys())
+    success_count = 0
     
     try:
-        # Fetch LTP data from DhanHQ
-        response = dhan.marketfeed_ltp(
-            exchange_segment=dhan.MCX,
-            security_id_list=security_ids
-        )
-        
-        if response and 'data' in response:
-            ltp_data = response['data']
-            
-            for security_id, commodity_name in MCX_COMMODITIES.items():
-                # Find matching data
-                commodity_data = next(
-                    (item for item in ltp_data if str(item.get('security_id')) == str(security_id)),
-                    None
+        # Fetch each commodity individually using get_ltp_data or intraday_minute_data
+        for security_id, commodity_name in MCX_COMMODITIES.items():
+            try:
+                # Method 1: Try using ltp_data
+                response = dhan.ltp_data(
+                    exchange_segment=dhan.MCX,
+                    security_id=str(security_id)
                 )
                 
-                if commodity_data:
-                    ltp = float(commodity_data.get('LTP', 0))
-                    prev_close = float(commodity_data.get('prev_close', 0))
-                    open_price = float(commodity_data.get('open', 0))
-                    high_price = float(commodity_data.get('high', 0))
-                    low_price = float(commodity_data.get('low', 0))
+                if response and 'data' in response:
+                    data = response['data']
+                    ltp = float(data.get('LTP', 0))
+                    prev_close = float(data.get('prev_close', 0))
                     
-                    # Calculate change
-                    prev_ltp = previous_prices.get(security_id, ltp)
-                    change_pct = calculate_change(ltp, prev_close)
-                    
-                    # Update previous prices
-                    previous_prices[security_id] = ltp
-                    
-                    # Emoji based on change
-                    if change_pct > 0:
-                        emoji = "🟢"
-                        change_text = f"+{change_pct:.2f}%"
-                    elif change_pct < 0:
-                        emoji = "🔴"
-                        change_text = f"{change_pct:.2f}%"
+                    if ltp > 0:
+                        # Calculate change
+                        change_pct = calculate_change(ltp, prev_close)
+                        
+                        # Update previous prices
+                        previous_prices[security_id] = ltp
+                        
+                        # Emoji based on change
+                        if change_pct > 0:
+                            emoji = "🟢"
+                            change_text = f"+{change_pct:.2f}%"
+                        elif change_pct < 0:
+                            emoji = "🔴"
+                            change_text = f"{change_pct:.2f}%"
+                        else:
+                            emoji = "⚪"
+                            change_text = "0.00%"
+                        
+                        # Format message
+                        line = f"{emoji} <b>{commodity_name}</b>: {format_price(ltp)} ({change_text})"
+                        message_lines.append(line)
+                        
+                        # Console output
+                        print(f"{emoji} {commodity_name:15s}: {format_price(ltp):12s} | Change: {change_text:8s}")
+                        success_count += 1
                     else:
-                        emoji = "⚪"
-                        change_text = "0.00%"
-                    
-                    # Format message
-                    line = f"{emoji} <b>{commodity_name}</b>: {format_price(ltp)} ({change_text})"
-                    message_lines.append(line)
-                    
-                    # Console output
-                    print(f"{emoji} {commodity_name:15s}: {format_price(ltp):12s} | Change: {change_text:8s}")
+                        print(f"⚠️ {commodity_name:15s}: No valid LTP")
                 else:
-                    message_lines.append(f"⚠️ <b>{commodity_name}</b>: Data not available")
-                    print(f"⚠️ {commodity_name:15s}: Data not available")
+                    print(f"⚠️ {commodity_name:15s}: No data in response")
+                    
+            except Exception as e:
+                print(f"⚠️ {commodity_name:15s}: Error - {str(e)}")
+                message_lines.append(f"⚠️ <b>{commodity_name}</b>: Data not available")
             
-            # Send to Telegram
+            # Small delay to avoid rate limiting
+            time.sleep(0.1)
+        
+        # Send to Telegram if we got at least some data
+        if success_count > 0:
+            message_lines.append(f"\n✅ Successfully fetched {success_count}/{len(MCX_COMMODITIES)} commodities")
             message = "\n".join(message_lines)
+            
             if send_telegram_message(message):
                 print(f"\n✅ Alert sent to Telegram successfully!")
             else:
                 print(f"\n⚠️ Failed to send Telegram alert")
-                
         else:
-            error_msg = "❌ No data received from DhanHQ API"
+            error_msg = "❌ Failed to fetch data for all commodities"
             print(error_msg)
             send_telegram_message(error_msg)
-            
+                
     except Exception as e:
         error_msg = f"❌ Error fetching LTP data: {str(e)}"
         print(error_msg)
@@ -195,8 +197,10 @@ def send_startup_message():
         f"⏱️ Update Interval: Every 1 minute\n\n"
         "✅ Bot is now running..."
     )
-    send_telegram_message(message)
-    print(message.replace('<b>', '').replace('</b>', ''))
+    if send_telegram_message(message):
+        print(message.replace('<b>', '').replace('</b>', ''))
+    else:
+        print("⚠️ Could not send startup message - check Telegram credentials")
 
 def run_scheduler():
     """Run the scheduler loop"""
@@ -222,6 +226,14 @@ def main():
     print(f"📊 Tracking {len(MCX_COMMODITIES)} commodities")
     print(f"⏱️  Update interval: Every {UPDATE_INTERVAL} seconds")
     print("="*60 + "\n")
+    
+    # Check if credentials are set
+    if DHAN_CLIENT_ID == "YOUR_DHAN_CLIENT_ID":
+        print("❌ ERROR: Please set your DHAN_CLIENT_ID in the code!")
+        return
+    
+    if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+        print("⚠️ WARNING: Telegram bot token not set - alerts will not work!")
     
     # Initialize DhanHQ
     if not initialize_dhan():
