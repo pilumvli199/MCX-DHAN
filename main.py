@@ -1,16 +1,5 @@
-def main():
-    """Main execution function"""
-    
-    # Load credentials from environment or config
-    CLIENT_ID = os.getenv('DHAN_CLIENT_ID', 'YOUR_CLIENT_ID')
-    ACCESS_TOKEN = os.getenv('DHAN_ACCESS_TOKEN', 'YOUR_ACCESS_TOKEN')
-    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
-    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
-    
-    if CLIENT_ID == 'YOUR_CLIENT_ID' or ACCESS_TOKEN == 'YOUR_ACCESS_TOKEN':
-        print("=" * 60)
-        print("MCX Trading System - DhanHQ API")"""
-MCX Trading System using DhanHQ API
+"""
+MCX Trading System using DhanHQ API (v2.0.2) with Telegram Alerts
 Complete system for MCX commodity trading with data fetching and analysis
 """
 
@@ -40,7 +29,7 @@ logger = logging.getLogger(__name__)
 class MCXTradingSystem:
     """Main class for MCX commodity trading system"""
     
-    # MCX Commodity Security IDs (Examples - update with actual IDs)
+    # MCX Commodity Security IDs (Examples - verify with current IDs)
     COMMODITIES = {
         'GOLD': 112577,      # Gold futures
         'SILVER': 112576,    # Silver futures
@@ -51,9 +40,6 @@ class MCXTradingSystem:
         'LEAD': 27161,       # Lead
         'NICKEL': 27163      # Nickel
     }
-    
-    # Exchange ID for MCX
-    MCX = dhanhq.MCX
     
     def __init__(self, client_id: str, access_token: str, 
                  telegram_bot_token: str = None, telegram_chat_id: str = None):
@@ -73,12 +59,16 @@ class MCXTradingSystem:
         # Initialize Telegram alerts
         self.telegram = None
         if telegram_bot_token and telegram_chat_id:
-            self.telegram = TelegramAlert(telegram_bot_token, telegram_chat_id)
-            logger.info("Telegram alerts enabled")
+            try:
+                self.telegram = TelegramAlert(telegram_bot_token, telegram_chat_id)
+                logger.info("✓ Telegram alerts enabled")
+            except Exception as e:
+                logger.warning(f"⚠ Telegram initialization failed: {e}")
+                logger.info("Continuing without Telegram alerts...")
         else:
-            logger.info("Telegram alerts disabled")
+            logger.info("Telegram alerts disabled (no credentials provided)")
         
-        logger.info("MCX Trading System initialized")
+        logger.info("MCX Trading System initialized with dhanhq v2.0.2")
         
         # Verify connection
         self._verify_connection()
@@ -86,13 +76,14 @@ class MCXTradingSystem:
     def _verify_connection(self):
         """Verify API connection and token validity"""
         try:
-            profile = self.dhan.get_profile()
-            logger.info(f"Connected successfully. Client ID: {profile['dhanClientId']}")
-            logger.info(f"Token validity: {profile['tokenValidity']}")
-            logger.info(f"Active segments: {profile['activeSegment']}")
-            return True
+            # In v2.0.2, use get_fund_limits() to verify connection
+            funds = self.dhan.get_fund_limits()
+            if funds:
+                logger.info("✓ Connected successfully to DhanHQ API")
+                return True
         except Exception as e:
-            logger.error(f"Connection verification failed: {e}")
+            logger.error(f"❌ Connection verification failed: {e}")
+            logger.warning("Please ensure your CLIENT_ID and ACCESS_TOKEN are correct")
             raise
     
     def get_ltp(self, symbol: str) -> Optional[float]:
@@ -111,14 +102,15 @@ class MCXTradingSystem:
                 logger.error(f"Invalid symbol: {symbol}")
                 return None
             
+            # Updated for v2.0.2 - MCX exchange segment
             response = self.dhan.get_ltp_data(
-                self.MCX,
-                security_id
+                exchange_segment=dhanhq.MCX,
+                security_id=str(security_id)
             )
             
             if response and 'data' in response:
                 ltp = response['data'].get('LTP')
-                logger.info(f"{symbol} LTP: {ltp}")
+                logger.info(f"{symbol} LTP: ₹{ltp}")
                 return ltp
             return None
         except Exception as e:
@@ -141,30 +133,30 @@ class MCXTradingSystem:
                 logger.error(f"Invalid symbol: {symbol}")
                 return None
             
-            response = self.dhan.get_quote_data(
-                self.MCX,
-                security_id
+            response = self.dhan.marketfeed_data(
+                exchange_segment=dhanhq.MCX,
+                security_id=str(security_id)
             )
             
             if response and 'data' in response:
                 quote = response['data']
                 logger.info(f"{symbol} Quote - LTP: {quote.get('LTP')}, "
                            f"Open: {quote.get('open')}, High: {quote.get('high')}, "
-                           f"Low: {quote.get('low')}, Close: {quote.get('close')}")
+                           f"Low: {quote.get('low')}, Close: {quote.get('prev_close')}")
                 return quote
             return None
         except Exception as e:
             logger.error(f"Error fetching quote for {symbol}: {e}")
             return None
     
-    def get_historical_data(self, symbol: str, interval: str = '1', 
+    def get_historical_data(self, symbol: str, interval: str = 'D', 
                           from_date: str = None, to_date: str = None) -> Optional[pd.DataFrame]:
         """
         Get historical candle data for analysis
         
         Args:
             symbol: Commodity symbol
-            interval: Time interval ('1', '5', '15', '25', '60', 'D')
+            interval: Time interval ('1', '5', '15', '60', 'D')
                      1 = 1 minute, 5 = 5 minutes, D = Daily
             from_date: Start date (YYYY-MM-DD)
             to_date: End date (YYYY-MM-DD)
@@ -184,30 +176,32 @@ class MCXTradingSystem:
             if not from_date:
                 from_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
             
-            # Fetch historical data
+            # Fetch historical data based on interval
             if interval == 'D':
+                # Daily data
                 response = self.dhan.historical_daily_data(
                     security_id=str(security_id),
-                    exchange_segment=self.MCX,
+                    exchange_segment=dhanhq.MCX,
                     instrument_type=dhanhq.FUT,
                     from_date=from_date,
                     to_date=to_date
                 )
             else:
+                # Intraday minute data
                 response = self.dhan.intraday_minute_data(
                     security_id=str(security_id),
-                    exchange_segment=self.MCX,
+                    exchange_segment=dhanhq.MCX,
                     instrument_type=dhanhq.FUT,
-                    from_date=from_date,
-                    to_date=to_date
+                    interval=interval
                 )
             
-            if response and 'data' in response:
+            if response and isinstance(response, dict) and 'data' in response:
                 df = pd.DataFrame(response['data'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                df = df.sort_values('timestamp')
-                logger.info(f"Fetched {len(df)} candles for {symbol}")
-                return df
+                if not df.empty:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    df = df.sort_values('timestamp')
+                    logger.info(f"Fetched {len(df)} candles for {symbol}")
+                    return df
             return None
         except Exception as e:
             logger.error(f"Error fetching historical data for {symbol}: {e}")
@@ -375,11 +369,19 @@ class MCXTradingSystem:
             
             # Send Telegram alert if enabled and signal is not HOLD
             if send_alert and self.telegram and signals['signal'] != 'HOLD':
-                self.telegram.send_trade_signal(
-                    symbol,
-                    signals['signal'],
-                    signals['indicators'] | {'signals': signals['signals']}
-                )
+                logger.info(f"📱 Sending Telegram alert for {symbol} - {signals['signal']}")
+                try:
+                    # Combine indicators with signals list
+                    alert_data = signals['indicators'].copy()
+                    alert_data['signals'] = signals['signals']
+                    
+                    self.telegram.send_trade_signal(
+                        symbol,
+                        signals['signal'],
+                        alert_data
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send Telegram alert: {e}")
             
             return analysis
         else:
@@ -388,22 +390,28 @@ class MCXTradingSystem:
                 'error': 'Unable to fetch historical data'
             }
     
-    def scan_all_commodities(self) -> List[Dict]:
+    def scan_all_commodities(self, send_alerts: bool = True) -> List[Dict]:
         """
         Scan all configured commodities
+        
+        Args:
+            send_alerts: Send Telegram alerts for signals
         
         Returns:
             List of analysis results
         """
         results = []
+        logger.info("🔍 Starting commodity scan...")
+        
         for symbol in self.COMMODITIES.keys():
             try:
-                analysis = self.analyze_commodity(symbol)
+                analysis = self.analyze_commodity(symbol, send_alert=send_alerts)
                 results.append(analysis)
                 time.sleep(1)  # Rate limiting
             except Exception as e:
                 logger.error(f"Error analyzing {symbol}: {e}")
         
+        logger.info(f"✓ Scan completed. Analyzed {len(results)} commodities")
         return results
     
     def get_positions(self) -> List[Dict]:
@@ -416,15 +424,15 @@ class MCXTradingSystem:
             logger.error(f"Error fetching positions: {e}")
             return []
     
-    def get_holdings(self) -> List[Dict]:
-        """Get holdings"""
+    def get_fund_limits(self) -> Dict:
+        """Get fund limits and available margin"""
         try:
-            holdings = self.dhan.get_holdings()
-            logger.info(f"Retrieved {len(holdings.get('data', []))} holdings")
-            return holdings.get('data', [])
+            funds = self.dhan.get_fund_limits()
+            logger.info("Retrieved fund limits")
+            return funds
         except Exception as e:
-            logger.error(f"Error fetching holdings: {e}")
-            return []
+            logger.error(f"Error fetching fund limits: {e}")
+            return {}
     
     def save_analysis(self, analysis: Dict, filename: str = None):
         """
@@ -451,83 +459,157 @@ def main():
     # Load credentials from environment or config
     CLIENT_ID = os.getenv('DHAN_CLIENT_ID', 'YOUR_CLIENT_ID')
     ACCESS_TOKEN = os.getenv('DHAN_ACCESS_TOKEN', 'YOUR_ACCESS_TOKEN')
+    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
     
     if CLIENT_ID == 'YOUR_CLIENT_ID' or ACCESS_TOKEN == 'YOUR_ACCESS_TOKEN':
         print("=" * 60)
-        print("MCX Trading System - DhanHQ API")
+        print("MCX Trading System - DhanHQ API v2.0.2")
         print("=" * 60)
-        print("\nPlease set your credentials:")
+        print("\n❌ Please set your credentials:")
         print("1. Set environment variables:")
         print("   export DHAN_CLIENT_ID='your_client_id'")
         print("   export DHAN_ACCESS_TOKEN='your_access_token'")
-        print("\n2. Or edit this file and replace the default values")
+        print("\n2. Optional - For Telegram alerts:")
+        print("   export TELEGRAM_BOT_TOKEN='your_bot_token'")
+        print("   export TELEGRAM_CHAT_ID='your_chat_id'")
         print("\nTo get your credentials:")
-        print("   - Login to https://web.dhan.co")
-        print("   - Go to My Profile > Access DhanHQ APIs")
+        print("   - Dhan: Login to https://web.dhan.co")
+        print("   - Go to: My Profile > Access DhanHQ APIs")
+        print("   - Telegram: Chat with @BotFather to create bot")
+        print("   - Get Chat ID from @userinfobot")
         print("=" * 60)
         return
     
     try:
         # Initialize trading system
-        system = MCXTradingSystem(CLIENT_ID, ACCESS_TOKEN)
+        system = MCXTradingSystem(
+            CLIENT_ID, 
+            ACCESS_TOKEN,
+            TELEGRAM_BOT_TOKEN if TELEGRAM_BOT_TOKEN else None,
+            TELEGRAM_CHAT_ID if TELEGRAM_CHAT_ID else None
+        )
         
         print("\n" + "=" * 60)
-        print("MCX TRADING SYSTEM - MENU")
+        print("📊 MCX TRADING SYSTEM - MENU 📊")
         print("=" * 60)
-        print("1. Analyze single commodity")
-        print("2. Scan all commodities")
-        print("3. Get current positions")
-        print("4. Get LTP for commodity")
-        print("5. Exit")
+        
+        # Show Telegram status
+        if system.telegram:
+            print("✅ Telegram Alerts: ENABLED")
+        else:
+            print("⚠️  Telegram Alerts: DISABLED")
+        
+        print("\n1. Analyze single commodity")
+        print("2. Scan all commodities (with alerts)")
+        print("3. Scan all commodities (no alerts)")
+        print("4. Get current positions")
+        print("5. Get LTP for commodity")
+        print("6. Get fund limits")
+        print("7. Test Telegram alert")
+        print("8. Exit")
         print("=" * 60)
         
         while True:
-            choice = input("\nEnter your choice (1-5): ").strip()
+            choice = input("\n👉 Enter your choice (1-8): ").strip()
             
             if choice == '1':
-                print("\nAvailable commodities:")
+                print("\n📋 Available commodities:")
                 for i, symbol in enumerate(system.COMMODITIES.keys(), 1):
                     print(f"{i}. {symbol}")
-                symbol = input("\nEnter commodity symbol: ").strip().upper()
+                symbol = input("\n💰 Enter commodity symbol: ").strip().upper()
                 
                 if symbol in system.COMMODITIES:
-                    analysis = system.analyze_commodity(symbol)
+                    send_alert = input("📱 Send Telegram alert? (y/n): ").strip().lower() == 'y'
+                    analysis = system.analyze_commodity(symbol, send_alert=send_alert)
+                    print("\n" + "=" * 60)
                     print(json.dumps(analysis, indent=2, default=str))
+                    print("=" * 60)
                     
-                    save = input("\nSave analysis? (y/n): ").strip().lower()
+                    save = input("\n💾 Save analysis? (y/n): ").strip().lower()
                     if save == 'y':
                         system.save_analysis(analysis)
                 else:
-                    print("Invalid symbol!")
+                    print("❌ Invalid symbol!")
             
             elif choice == '2':
-                print("\nScanning all commodities...")
-                results = system.scan_all_commodities()
+                print("\n🔍 Scanning all commodities (WITH alerts)...")
+                results = system.scan_all_commodities(send_alerts=True)
+                print("\n" + "=" * 60)
                 print(json.dumps(results, indent=2, default=str))
+                print("=" * 60)
                 
-                save = input("\nSave results? (y/n): ").strip().lower()
+                save = input("\n💾 Save results? (y/n): ").strip().lower()
                 if save == 'y':
                     system.save_analysis(results, 'mcx_scan_results.json')
             
             elif choice == '3':
-                positions = system.get_positions()
-                print(json.dumps(positions, indent=2, default=str))
+                print("\n🔍 Scanning all commodities (NO alerts)...")
+                results = system.scan_all_commodities(send_alerts=False)
+                print("\n" + "=" * 60)
+                print(json.dumps(results, indent=2, default=str))
+                print("=" * 60)
+                
+                save = input("\n💾 Save results? (y/n): ").strip().lower()
+                if save == 'y':
+                    system.save_analysis(results, 'mcx_scan_results.json')
             
             elif choice == '4':
-                symbol = input("\nEnter commodity symbol: ").strip().upper()
-                ltp = system.get_ltp(symbol)
-                if ltp:
-                    print(f"\n{symbol} LTP: ₹{ltp}")
+                print("\n📈 Fetching positions...")
+                positions = system.get_positions()
+                print("\n" + "=" * 60)
+                print(json.dumps(positions, indent=2, default=str))
+                print("=" * 60)
             
             elif choice == '5':
-                print("\nExiting... Thank you!")
+                symbol = input("\n💰 Enter commodity symbol: ").strip().upper()
+                ltp = system.get_ltp(symbol)
+                if ltp:
+                    print(f"\n✅ {symbol} LTP: ₹{ltp}")
+            
+            elif choice == '6':
+                print("\n💵 Fetching fund limits...")
+                funds = system.get_fund_limits()
+                print("\n" + "=" * 60)
+                print(json.dumps(funds, indent=2, default=str))
+                print("=" * 60)
+            
+            elif choice == '7':
+                if system.telegram:
+                    print("\n📱 Sending test alert...")
+                    test_data = {
+                        'price': 62500.00,
+                        'SMA_10': 62400.00,
+                        'SMA_20': 62300.00,
+                        'RSI': 55.5,
+                        'MACD': 0.0025,
+                        'ATR': 150.00,
+                        'signals': [
+                            'Bullish: SMA10 > SMA20',
+                            'MACD above Signal'
+                        ]
+                    }
+                    success = system.telegram.send_trade_signal('GOLD', 'BUY', test_data)
+                    if success:
+                        print("✅ Test alert sent successfully!")
+                    else:
+                        print("❌ Failed to send test alert. Check logs.")
+                else:
+                    print("❌ Telegram alerts not enabled!")
+                    print("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID environment variables")
+            
+            elif choice == '8':
+                print("\n👋 Exiting... धन्यवाद! (Thank you!)")
                 break
             
             else:
-                print("Invalid choice!")
+                print("❌ Invalid choice!")
     
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Program interrupted by user")
+        logger.info("Program interrupted by user")
     except Exception as e:
-        logger.error(f"Error in main: {e}")
+        logger.error(f"❌ Error in main: {e}")
         raise
 
 
