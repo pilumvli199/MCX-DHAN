@@ -1,114 +1,115 @@
 """
-Fetch Current MCX Contracts from DhanHQ Instruments Master
+Fetch Current MCX Contracts from DhanHQ CSV
 Finds active October/November 2025 contracts
+Downloads: https://images.dhan.co/api-data/api-scrip-master.csv
 """
 
 import requests
-import json
+import csv
 from datetime import datetime
-import os
+from io import StringIO
 
-# DhanHQ API Credentials
-DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "YOUR_DHAN_CLIENT_ID")
-DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "YOUR_DHAN_ACCESS_TOKEN")
-
-DHAN_API_BASE = "https://api.dhan.co/v2"
-
-def fetch_instruments():
-    """Fetch MCX instruments master data"""
-    print("🔍 Fetching MCX Instruments Master Data...\n")
+def fetch_mcx_contracts():
+    """Download and parse DhanHQ instruments CSV"""
+    print("🔍 Downloading DhanHQ Instruments Master CSV...\n")
     
     try:
-        # DhanHQ Instruments API
-        url = f"{DHAN_API_BASE}/instruments"
+        # Download CSV
+        url = "https://images.dhan.co/api-data/api-scrip-master.csv"
         
-        headers = {
-            "access-token": DHAN_ACCESS_TOKEN,
-            "Content-Type": "application/json"
-        }
-        
-        print(f"📡 Requesting: {url}")
-        response = requests.get(url, headers=headers, timeout=30)
-        
-        print(f"✅ Response Status: {response.status_code}\n")
+        print(f"📡 Downloading: {url}")
+        response = requests.get(url, timeout=30)
         
         if response.status_code == 200:
-            data = response.json()
+            print(f"✅ Download successful! Size: {len(response.content)} bytes\n")
             
-            # Filter MCX commodities
-            print("🔍 Filtering MCX Commodities...\n")
-            
-            if isinstance(data, list):
-                mcx_instruments = [item for item in data if item.get('SEM_EXM_EXCH_ID') == 'MCX' or item.get('exchange') == 'MCX']
-            elif 'data' in data:
-                mcx_instruments = [item for item in data['data'] if item.get('SEM_EXM_EXCH_ID') == 'MCX' or item.get('exchange') == 'MCX']
-            else:
-                print("⚠️ Unexpected data format")
-                print(json.dumps(data, indent=2)[:500])
-                return
-            
-            print(f"📊 Found {len(mcx_instruments)} MCX instruments\n")
+            # Parse CSV
+            csv_text = response.content.decode('utf-8')
+            csv_reader = csv.DictReader(StringIO(csv_text))
             
             # Target commodities
             target_commodities = {
                 'GOLD': [],
                 'GOLDM': [],
+                'GOLDMINI': [],
+                'GOLDPETAL': [],
                 'SILVER': [],
                 'SILVERM': [],
+                'SILVERMICRO': [],
                 'CRUDEOIL': [],
+                'CRUDEOILM': [],
                 'NATURALGAS': [],
                 'COPPER': [],
                 'ZINC': [],
+                'ZINCMINI': [],
                 'ALUMINIUM': [],
+                'ALUMINIMINI': [],
                 'LEAD': [],
-                'NICKEL': []
+                'LEADMINI': [],
+                'NICKEL': [],
             }
             
-            # Current date for expiry comparison
+            mcx_count = 0
             today = datetime.now()
             
-            # Filter active contracts
-            for instrument in mcx_instruments:
-                symbol = instrument.get('SEM_SMST_SECURITY_ID') or instrument.get('symbol', '')
-                trading_symbol = instrument.get('SEM_TRADING_SYMBOL') or instrument.get('tradingSymbol', '')
-                security_id = instrument.get('SEM_SECURITY_ID') or instrument.get('securityId', '')
-                expiry = instrument.get('SEM_EXPIRY_DATE') or instrument.get('expiryDate', '')
+            # October 2025 and November 2025
+            target_months = ['2025-10', '2025-11', '2025-12']
+            
+            print("🔍 Filtering MCX Commodities...\n")
+            
+            for row in csv_reader:
+                # Check if MCX exchange
+                exchange = row.get('SEM_EXM_EXCH_ID', '')
                 
-                # Check expiry date
-                if expiry:
-                    try:
-                        if isinstance(expiry, str):
+                if exchange == 'MCX':
+                    mcx_count += 1
+                    
+                    symbol = row.get('SEM_SMST_SECURITY_ID', '')
+                    trading_symbol = row.get('SEM_TRADING_SYMBOL', '')
+                    security_id = row.get('SEM_SECURITY_ID', '')
+                    expiry = row.get('SEM_EXPIRY_DATE', '')
+                    
+                    # Check expiry date (should be in Oct/Nov/Dec 2025)
+                    if expiry:
+                        try:
                             expiry_date = datetime.strptime(expiry.split()[0], '%Y-%m-%d')
-                        else:
-                            expiry_date = expiry
-                        
-                        # Only future contracts (not expired)
-                        if expiry_date < today:
+                            
+                            # Skip expired
+                            if expiry_date < today:
+                                continue
+                            
+                            # Only Oct/Nov/Dec 2025
+                            expiry_month = expiry[:7]  # YYYY-MM
+                            if expiry_month not in target_months:
+                                continue
+                                
+                        except:
                             continue
-                    except:
-                        pass
-                
-                # Match commodity names
-                symbol_upper = str(symbol).upper()
-                trading_upper = str(trading_symbol).upper()
-                
-                for commodity in target_commodities.keys():
-                    if commodity in symbol_upper or commodity in trading_upper:
-                        target_commodities[commodity].append({
-                            'security_id': security_id,
-                            'symbol': symbol,
-                            'trading_symbol': trading_symbol,
-                            'expiry': expiry
-                        })
+                    
+                    # Match commodity names
+                    symbol_upper = str(symbol).upper()
+                    
+                    for commodity in target_commodities.keys():
+                        if symbol_upper.startswith(commodity):
+                            target_commodities[commodity].append({
+                                'security_id': security_id,
+                                'symbol': symbol,
+                                'trading_symbol': trading_symbol,
+                                'expiry': expiry
+                            })
+                            break
+            
+            print(f"📊 Total MCX instruments: {mcx_count}")
+            print(f"🔍 Filtered for Oct/Nov/Dec 2025 contracts\n")
             
             # Display results
-            print("="*80)
-            print("📊 CURRENT MCX CONTRACTS (Active/Future)")
-            print("="*80)
+            print("="*90)
+            print("📊 CURRENT MCX CONTRACTS (October/November/December 2025)")
+            print("="*90)
             
             updated_dict = {}
             
-            for commodity, contracts in target_commodities.items():
+            for commodity, contracts in sorted(target_commodities.items()):
                 if contracts:
                     print(f"\n🔹 {commodity}:")
                     
@@ -116,38 +117,27 @@ def fetch_instruments():
                     contracts.sort(key=lambda x: x['expiry'] if x['expiry'] else 'Z')
                     
                     for i, contract in enumerate(contracts[:3], 1):  # Show top 3
-                        print(f"   {i}. Security ID: {contract['security_id']}")
-                        print(f"      Symbol: {contract['trading_symbol']}")
-                        print(f"      Expiry: {contract['expiry']}")
+                        print(f"   {i}. Security ID: {contract['security_id']:10s} | Expiry: {contract['expiry']:20s} | Symbol: {contract['trading_symbol']}")
                         
-                        # Use nearest expiry for main dict
+                        # Use nearest expiry (typically October 2025)
                         if i == 1:
-                            updated_dict[contract['security_id']] = commodity
-                else:
-                    print(f"\n⚠️ {commodity}: No active contracts found")
+                            updated_dict[int(contract['security_id'])] = commodity
             
             # Generate Python dictionary code
-            print("\n" + "="*80)
-            print("📝 UPDATED MCX_COMMODITIES DICTIONARY")
-            print("="*80)
+            print("\n" + "="*90)
+            print("📝 UPDATED MCX_COMMODITIES DICTIONARY (Copy this to your code)")
+            print("="*90)
             print("\nMCX_COMMODITIES = {")
             for sec_id, name in updated_dict.items():
                 print(f'    {sec_id}: "{name}",')
-            print("}")
+            print("}\n")
             
-            # Save to file
-            with open('mcx_current_contracts.json', 'w') as f:
-                json.dump({
-                    'updated_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'contracts': updated_dict,
-                    'full_data': target_commodities
-                }, f, indent=2)
-            
-            print("\n✅ Saved to: mcx_current_contracts.json")
+            print("="*90)
+            print(f"✅ Found {len(updated_dict)} active MCX contracts")
+            print("="*90)
             
         else:
-            print(f"❌ API Error: {response.status_code}")
-            print(response.text)
+            print(f"❌ Download failed: {response.status_code}")
             
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -155,16 +145,9 @@ def fetch_instruments():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    print("\n" + "="*80)
-    print("🚀 MCX INSTRUMENTS FETCHER - DhanHQ")
-    print("="*80)
-    print("Finding current month active contracts...\n")
+    print("\n" + "="*90)
+    print("🚀 MCX INSTRUMENTS FETCHER - DhanHQ CSV Parser")
+    print("="*90)
+    print("Finding October/November 2025 active contracts...\n")
     
-    if DHAN_CLIENT_ID == "YOUR_DHAN_CLIENT_ID":
-        print("❌ ERROR: Set DHAN_CLIENT_ID environment variable!")
-    elif DHAN_ACCESS_TOKEN == "YOUR_DHAN_ACCESS_TOKEN":
-        print("❌ ERROR: Set DHAN_ACCESS_TOKEN environment variable!")
-    else:
-        fetch_instruments()
-    
-    print("\n" + "="*80)
+    fetch_mcx_contracts()
