@@ -1,15 +1,15 @@
 """
-MCX Commodities LTP Tracker Bot - FIXED VERSION
+MCX Commodities Market Data Tracker - WORKING VERSION
+Uses Direct REST API calls (No SDK dependency issues!)
 Fetches complete market data of MCX commodities
 Sends formatted alerts to Telegram
 
 Requirements:
-pip install dhanhq requests
+pip install requests
 """
 
 import time
 import requests
-from dhanhq import dhanhq
 from datetime import datetime
 import threading
 import os
@@ -22,6 +22,9 @@ DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "YOUR_DHAN_ACCESS_TOKEN")
 # Telegram Bot Configuration
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
+
+# DhanHQ API Base URL
+DHAN_API_BASE = "https://api.dhan.co/v2"
 
 # MCX Commodity Security IDs
 MCX_COMMODITIES = {
@@ -53,21 +56,36 @@ MCX_COMMODITIES = {
 UPDATE_INTERVAL = 300  # 5 minutes
 
 # ==================== GLOBAL VARIABLES ====================
-dhan = None
 previous_prices = {}
 bot_running = True
 
 # ==================== FUNCTIONS ====================
 
-def initialize_dhan():
-    """Initialize DhanHQ connection"""
-    global dhan
+def validate_credentials():
+    """Validate DhanHQ credentials"""
     try:
-        dhan = dhanhq(DHAN_CLIENT_ID, DHAN_ACCESS_TOKEN)
-        print("✅ DhanHQ connection initialized successfully!")
-        return True
+        url = f"{DHAN_API_BASE}/profile"
+        headers = {
+            "access-token": DHAN_ACCESS_TOKEN,
+            "Content-Type": "application/json"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"✅ Connected to DhanHQ!")
+            print(f"   Client ID: {data.get('dhanClientId', 'N/A')}")
+            print(f"   Active Segments: {data.get('activeSegment', 'N/A')}")
+            print(f"   Data Plan: {data.get('dataPlan', 'N/A')}")
+            print(f"   Data Validity: {data.get('dataValidity', 'N/A')}")
+            return True
+        else:
+            print(f"❌ API Error: {response.status_code} - {response.text}")
+            return False
+            
     except Exception as e:
-        print(f"❌ Error initializing DhanHQ: {e}")
+        print(f"❌ Connection Error: {e}")
         return False
 
 def send_telegram_message(message):
@@ -80,13 +98,9 @@ def send_telegram_message(message):
             "parse_mode": "HTML"
         }
         response = requests.post(url, json=payload, timeout=10)
-        if response.status_code == 200:
-            return True
-        else:
-            print(f"⚠️ Telegram API Error: {response.status_code} - {response.text}")
-            return False
+        return response.status_code == 200
     except Exception as e:
-        print(f"❌ Error sending Telegram message: {e}")
+        print(f"❌ Telegram Error: {e}")
         return False
 
 def format_price(price):
@@ -109,7 +123,7 @@ def calculate_change(current, previous):
     return 0
 
 def fetch_market_data():
-    """Fetch complete market data for all MCX commodities"""
+    """Fetch complete market data for all MCX commodities using REST API"""
     global previous_prices
     
     print(f"\n{'='*70}")
@@ -117,143 +131,174 @@ def fetch_market_data():
     print(f"{'='*70}")
     
     message_lines = [
-        "📊 <b>MCX COMMODITIES - COMPLETE MARKET DATA</b>",
-        f"🕐 Time: {datetime.now().strftime('%d-%m-%Y %I:%M:%S %p')}",
+        "📊 <b>MCX COMMODITIES - MARKET DATA</b>",
+        f"🕐 {datetime.now().strftime('%d-%m-%Y %I:%M:%S %p')}",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     ]
     
     success_count = 0
     
     try:
-        # Prepare request payload for Market Quote API
-        # Format: {"MCX_COM": [security_id1, security_id2, ...]}
+        # Prepare request for Market Quote API
+        # Endpoint: POST /marketfeed/quote
+        url = f"{DHAN_API_BASE}/marketfeed/quote"
+        
+        headers = {
+            "access-token": DHAN_ACCESS_TOKEN,
+            "client-id": DHAN_CLIENT_ID,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+        
+        # Request payload: {"MCX_COM": [security_ids]}
         payload = {
             "MCX_COM": list(MCX_COMMODITIES.keys())
         }
         
-        # CORRECT METHOD: Use get_market_quote_data with QUOTE type
-        # This gives: LTP, OHLC, Volume, OI, Market Depth, Circuit Limits
-        response = dhan.get_market_quote_data(payload)
+        print(f"🔄 Sending request to DhanHQ API...")
+        print(f"   Endpoint: {url}")
+        print(f"   Commodities: {len(MCX_COMMODITIES)}")
         
-        if response and 'data' in response and 'MCX_COM' in response['data']:
-            mcx_data = response['data']['MCX_COM']
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        
+        print(f"📡 Response Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
             
-            for security_id, commodity_name in MCX_COMMODITIES.items():
-                security_data = mcx_data.get(str(security_id))
+            if 'data' in data and 'MCX_COM' in data['data']:
+                mcx_data = data['data']['MCX_COM']
                 
-                if security_data:
-                    # Extract all available data
-                    ltp = float(security_data.get('last_price', 0))
+                for security_id, commodity_name in MCX_COMMODITIES.items():
+                    security_data = mcx_data.get(str(security_id))
                     
-                    # OHLC Data
-                    ohlc = security_data.get('ohlc', {})
-                    open_price = float(ohlc.get('open', 0))
-                    high_price = float(ohlc.get('high', 0))
-                    low_price = float(ohlc.get('low', 0))
-                    prev_close = float(ohlc.get('close', 0))
-                    
-                    # Volume & OI Data
-                    volume = int(security_data.get('volume', 0))
-                    oi = int(security_data.get('oi', 0))
-                    oi_high = int(security_data.get('oi_day_high', 0))
-                    oi_low = int(security_data.get('oi_day_low', 0))
-                    
-                    # Other Data
-                    avg_price = float(security_data.get('average_price', 0))
-                    buy_qty = int(security_data.get('buy_quantity', 0))
-                    sell_qty = int(security_data.get('sell_quantity', 0))
-                    net_change = float(security_data.get('net_change', 0))
-                    
-                    # Circuit Limits
-                    upper_circuit = float(security_data.get('upper_circuit_limit', 0))
-                    lower_circuit = float(security_data.get('lower_circuit_limit', 0))
-                    
-                    if ltp > 0:
-                        # Calculate change percentage
-                        change_pct = calculate_change(ltp, prev_close)
+                    if security_data:
+                        # Extract all available data
+                        ltp = float(security_data.get('last_price', 0))
                         
-                        # Update previous prices
-                        previous_prices[security_id] = ltp
+                        # OHLC Data
+                        ohlc = security_data.get('ohlc', {})
+                        open_price = float(ohlc.get('open', 0))
+                        high_price = float(ohlc.get('high', 0))
+                        low_price = float(ohlc.get('low', 0))
+                        prev_close = float(ohlc.get('close', 0))
                         
-                        # Emoji based on change
-                        if change_pct > 0:
-                            emoji = "🟢"
-                            change_text = f"+{change_pct:.2f}%"
-                        elif change_pct < 0:
-                            emoji = "🔴"
-                            change_text = f"{change_pct:.2f}%"
+                        # Volume & OI Data
+                        volume = int(security_data.get('volume', 0))
+                        oi = int(security_data.get('oi', 0))
+                        
+                        # Other Data
+                        buy_qty = int(security_data.get('buy_quantity', 0))
+                        sell_qty = int(security_data.get('sell_quantity', 0))
+                        net_change = float(security_data.get('net_change', 0))
+                        
+                        if ltp > 0:
+                            # Calculate change percentage
+                            change_pct = calculate_change(ltp, prev_close)
+                            
+                            # Update previous prices
+                            previous_prices[security_id] = ltp
+                            
+                            # Emoji based on change
+                            if change_pct > 0:
+                                emoji = "🟢"
+                                change_text = f"+{change_pct:.2f}%"
+                            elif change_pct < 0:
+                                emoji = "🔴"
+                                change_text = f"{change_pct:.2f}%"
+                            else:
+                                emoji = "⚪"
+                                change_text = "0.00%"
+                            
+                            # Build detailed message
+                            commodity_msg = [
+                                f"\n{emoji} <b>{commodity_name}</b>",
+                                f"├ LTP: {format_price(ltp)} ({change_text})",
+                            ]
+                            
+                            # Add OHLC if available
+                            if open_price > 0 or high_price > 0 or low_price > 0:
+                                commodity_msg.append(
+                                    f"├ O: {format_price(open_price)} | H: {format_price(high_price)} | L: {format_price(low_price)}"
+                                )
+                            
+                            # Add Volume and OI if available
+                            if volume > 0 or oi > 0:
+                                vol_oi_line = "├"
+                                if volume > 0:
+                                    vol_oi_line += f" Vol: {format_number(volume)}"
+                                if oi > 0:
+                                    if volume > 0:
+                                        vol_oi_line += " |"
+                                    vol_oi_line += f" OI: {format_number(oi)}"
+                                commodity_msg.append(vol_oi_line)
+                            
+                            # Add Buy/Sell quantities
+                            if buy_qty > 0 or sell_qty > 0:
+                                commodity_msg.append(f"└ Buy: {format_number(buy_qty)} | Sell: {format_number(sell_qty)}")
+                            else:
+                                commodity_msg.append("└─────────────────")
+                            
+                            message_lines.extend(commodity_msg)
+                            
+                            # Console output
+                            print(f"\n{emoji} {commodity_name}")
+                            print(f"  LTP: {format_price(ltp):12s} | Change: {change_text:8s}")
+                            if open_price > 0:
+                                print(f"  O: {format_price(open_price):10s} H: {format_price(high_price):10s} L: {format_price(low_price):10s}")
+                            if volume > 0 or oi > 0:
+                                print(f"  Vol: {format_number(volume):15s} | OI: {format_number(oi)}")
+                            
+                            success_count += 1
                         else:
-                            emoji = "⚪"
-                            change_text = "0.00%"
-                        
-                        # Build detailed message
-                        commodity_msg = [
-                            f"\n{emoji} <b>{commodity_name}</b>",
-                            f"├ LTP: {format_price(ltp)} ({change_text})",
-                            f"├ O: {format_price(open_price)} | H: {format_price(high_price)} | L: {format_price(low_price)}",
-                        ]
-                        
-                        # Add Volume and OI if available
-                        if volume > 0:
-                            commodity_msg.append(f"├ Vol: {format_number(volume)}")
-                        if oi > 0:
-                            commodity_msg.append(f"├ OI: {format_number(oi)}")
-                        
-                        # Add Buy/Sell quantities
-                        if buy_qty > 0 or sell_qty > 0:
-                            commodity_msg.append(f"└ Buy: {format_number(buy_qty)} | Sell: {format_number(sell_qty)}")
-                        else:
-                            commodity_msg.append("└─────────────────")
-                        
-                        message_lines.extend(commodity_msg)
-                        
-                        # Console output
-                        print(f"\n{emoji} {commodity_name}")
-                        print(f"  LTP: {format_price(ltp):12s} | Change: {change_text:8s}")
-                        print(f"  O: {format_price(open_price):10s} H: {format_price(high_price):10s} L: {format_price(low_price):10s}")
-                        if volume > 0:
-                            print(f"  Volume: {format_number(volume):15s} | OI: {format_number(oi)}")
-                        
-                        success_count += 1
+                            print(f"⚪ {commodity_name:15s}: No LTP data")
                     else:
-                        print(f"⚪ {commodity_name:15s}: No LTP data")
-                else:
-                    print(f"⚠️ {commodity_name:15s}: Not found in response")
+                        print(f"⚠️ {commodity_name:15s}: Not found in response")
+            else:
+                print("⚠️ No MCX_COM data in response")
+                print(f"Response keys: {data.get('data', {}).keys() if 'data' in data else 'No data key'}")
+        
+        elif response.status_code == 429:
+            error_msg = "⚠️ Rate limit exceeded. Waiting longer..."
+            print(error_msg)
+            send_telegram_message(error_msg)
+            
         else:
-            print("⚠️ No MCX_COM data in response")
-            print(f"Response keys: {response.get('data', {}).keys() if response else 'None'}")
+            error_msg = f"❌ API Error {response.status_code}: {response.text}"
+            print(error_msg)
+            send_telegram_message(f"❌ API Error: {response.status_code}")
         
         # Send to Telegram
         if success_count > 0:
             message_lines.append(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            message_lines.append(f"✅ Data fetched: {success_count}/{len(MCX_COMMODITIES)} commodities")
-            message_lines.append(f"⏱️ Next update in {UPDATE_INTERVAL//60} minute(s)")
+            message_lines.append(f"✅ {success_count}/{len(MCX_COMMODITIES)} commodities")
+            message_lines.append(f"⏱️ Next update in {UPDATE_INTERVAL//60} min")
             
             message = "\n".join(message_lines)
             
             if send_telegram_message(message):
-                print(f"\n✅ Alert sent to Telegram successfully!")
+                print(f"\n✅ Alert sent to Telegram!")
             else:
-                print(f"\n⚠️ Failed to send Telegram alert")
+                print(f"\n⚠️ Telegram alert failed")
         else:
-            error_msg = "❌ Failed to fetch data for all commodities"
+            error_msg = "❌ No data fetched for any commodity"
             print(error_msg)
             send_telegram_message(error_msg)
                 
-    except AttributeError as e:
-        error_msg = (
-            f"❌ API Method Error: {str(e)}\n\n"
-            "Possible solutions:\n"
-            "1. Update dhanhq package: pip install --upgrade dhanhq\n"
-            "2. Check API documentation for correct method name\n"
-            "3. Verify your DhanHQ API subscription is active"
-        )
+    except requests.exceptions.Timeout:
+        error_msg = "⏱️ API request timeout. Will retry..."
         print(error_msg)
-        send_telegram_message(error_msg.replace('\n', '\n'))
+        send_telegram_message(error_msg)
+        
+    except requests.exceptions.RequestException as e:
+        error_msg = f"❌ Network error: {str(e)}"
+        print(error_msg)
+        send_telegram_message(error_msg)
+        
     except Exception as e:
-        error_msg = f"❌ Error fetching market data: {str(e)}"
+        error_msg = f"❌ Unexpected error: {str(e)}"
         print(error_msg)
-        print(f"Full error details: {repr(e)}")
+        print(f"Full error: {repr(e)}")
         send_telegram_message(error_msg)
 
 def send_startup_message():
@@ -262,9 +307,9 @@ def send_startup_message():
     
     message = (
         "🤖 <b>MCX Market Data Tracker Started!</b>\n\n"
-        f"🕐 Started: {datetime.now().strftime('%d-%m-%Y %I:%M:%S %p')}\n"
+        f"🕐 {datetime.now().strftime('%d-%m-%Y %I:%M:%S %p')}\n"
         f"📊 Tracking: {len(MCX_COMMODITIES)} commodities\n"
-        f"⏱️ Update Interval: Every {interval_text}\n\n"
+        f"⏱️ Updates: Every {interval_text}\n\n"
         "📈 Data includes:\n"
         "• LTP & Price Change %\n"
         "• OHLC (Open/High/Low/Close)\n"
@@ -288,7 +333,7 @@ def run_scheduler():
             print(f"\n💤 Waiting {UPDATE_INTERVAL} seconds for next update...")
             time.sleep(UPDATE_INTERVAL)
         except Exception as e:
-            print(f"❌ Error in scheduler: {e}")
+            print(f"❌ Scheduler error: {e}")
             time.sleep(10)
 
 def main():
@@ -299,29 +344,36 @@ def main():
     print("🚀 MCX COMMODITIES MARKET DATA TRACKER")
     print("="*70)
     print(f"📊 Tracking: {len(MCX_COMMODITIES)} commodities")
-    print(f"⏱️  Update interval: Every {UPDATE_INTERVAL} seconds")
-    print(f"📈 Data: LTP, OHLC, Volume, OI, Buy/Sell Qty")
+    print(f"⏱️  Update: Every {UPDATE_INTERVAL} seconds")
+    print(f"📈 Data: LTP, OHLC, Volume, OI, Buy/Sell")
+    print(f"🔌 Using: Direct REST API (No SDK issues!)")
     print("="*70 + "\n")
     
     # Validate credentials
     if DHAN_CLIENT_ID == "YOUR_DHAN_CLIENT_ID":
-        print("❌ ERROR: Please set DHAN_CLIENT_ID!")
-        print("Get it from: https://web.dhan.co (Profile > Access DhanHQ APIs)")
+        print("❌ ERROR: Set DHAN_CLIENT_ID!")
+        print("Get from: https://web.dhan.co → Profile → Access DhanHQ APIs")
         return
     
     if DHAN_ACCESS_TOKEN == "YOUR_DHAN_ACCESS_TOKEN":
-        print("❌ ERROR: Please set DHAN_ACCESS_TOKEN!")
+        print("❌ ERROR: Set DHAN_ACCESS_TOKEN!")
         return
     
     if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
-        print("⚠️ WARNING: Telegram not configured - alerts disabled")
+        print("⚠️ WARNING: Telegram not configured")
     
-    # Initialize DhanHQ
-    if not initialize_dhan():
-        print("❌ Cannot start bot without DhanHQ connection!")
+    # Test DhanHQ connection
+    print("🔄 Testing DhanHQ connection...\n")
+    if not validate_credentials():
+        print("\n❌ Cannot connect to DhanHQ!")
+        print("Please check:")
+        print("  1. Your access token is valid")
+        print("  2. Data API subscription (₹499/month) is active")
+        print("  3. Internet connection is working")
         return
     
     # Send startup notification
+    print("\n")
     send_startup_message()
     
     print("\n✅ Bot is running! Press Ctrl+C to stop.\n")
