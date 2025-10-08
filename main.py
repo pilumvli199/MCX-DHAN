@@ -1,11 +1,6 @@
 """
-MCX Commodities Market Data Tracker - WORKING VERSION
-Uses Direct REST API calls (No SDK dependency issues!)
-Fetches complete market data of MCX commodities
-Sends formatted alerts to Telegram
-
-Requirements:
-pip install requests
+MCX Commodities Market Data Tracker - FIXED VERSION
+Enhanced debugging and error handling
 """
 
 import time
@@ -13,20 +8,17 @@ import requests
 from datetime import datetime
 import threading
 import os
+import json
 
 # ==================== CONFIGURATION ====================
-# DhanHQ API Credentials
 DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "YOUR_DHAN_CLIENT_ID")
 DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "YOUR_DHAN_ACCESS_TOKEN")
 
-# Telegram Bot Configuration
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 
-# DhanHQ API Base URL
 DHAN_API_BASE = "https://api.dhan.co/v2"
 
-# MCX Commodity Security IDs
 MCX_COMMODITIES = {
     477166: "ALUMINIUM",
     477183: "CARDAMOM",
@@ -52,10 +44,8 @@ MCX_COMMODITIES = {
     477172: "ZINCMINI",
 }
 
-# Update interval in seconds (300 = 5 min, 60 = 1 min)
-UPDATE_INTERVAL = 300  # 5 minutes
+UPDATE_INTERVAL = 300
 
-# ==================== GLOBAL VARIABLES ====================
 previous_prices = {}
 bot_running = True
 
@@ -78,7 +68,6 @@ def validate_credentials():
             print(f"   Client ID: {data.get('dhanClientId', 'N/A')}")
             print(f"   Active Segments: {data.get('activeSegment', 'N/A')}")
             print(f"   Data Plan: {data.get('dataPlan', 'N/A')}")
-            print(f"   Data Validity: {data.get('dataValidity', 'N/A')}")
             return True
         else:
             print(f"❌ API Error: {response.status_code} - {response.text}")
@@ -123,7 +112,7 @@ def calculate_change(current, previous):
     return 0
 
 def fetch_market_data():
-    """Fetch complete market data for all MCX commodities using REST API"""
+    """Fetch complete market data for all MCX commodities"""
     global previous_prices
     
     print(f"\n{'='*70}")
@@ -139,8 +128,6 @@ def fetch_market_data():
     success_count = 0
     
     try:
-        # Prepare request for Market Quote API
-        # Endpoint: POST /marketfeed/quote
         url = f"{DHAN_API_BASE}/marketfeed/quote"
         
         headers = {
@@ -150,7 +137,6 @@ def fetch_market_data():
             "Accept": "application/json"
         }
         
-        # Request payload: {"MCX_COM": [security_ids]}
         payload = {
             "MCX_COM": list(MCX_COMMODITIES.keys())
         }
@@ -163,18 +149,52 @@ def fetch_market_data():
         
         print(f"📡 Response Status: {response.status_code}")
         
+        # DEBUG: Print full response
+        print(f"\n🔍 DEBUG - Full API Response:")
+        print(json.dumps(response.json(), indent=2))
+        
         if response.status_code == 200:
             data = response.json()
             
+            # Try different possible response structures
+            mcx_data = None
+            
+            # Structure 1: data.MCX_COM
             if 'data' in data and 'MCX_COM' in data['data']:
                 mcx_data = data['data']['MCX_COM']
+                print("✅ Found data in: data.MCX_COM")
+            
+            # Structure 2: MCX_COM directly
+            elif 'MCX_COM' in data:
+                mcx_data = data['MCX_COM']
+                print("✅ Found data in: MCX_COM")
+            
+            # Structure 3: data as direct dict
+            elif 'data' in data and isinstance(data['data'], dict):
+                mcx_data = data['data']
+                print("✅ Found data in: data (direct dict)")
+            
+            # Structure 4: Direct list or dict
+            elif isinstance(data, dict):
+                # Check if any keys are security IDs
+                for key in data.keys():
+                    if key.isdigit() or isinstance(key, int):
+                        mcx_data = data
+                        print("✅ Found data in: root (security IDs as keys)")
+                        break
+            
+            if mcx_data:
+                print(f"✅ Processing {len(mcx_data)} items from response")
                 
                 for security_id, commodity_name in MCX_COMMODITIES.items():
-                    security_data = mcx_data.get(str(security_id))
+                    # Try both string and int keys
+                    security_data = mcx_data.get(str(security_id)) or mcx_data.get(security_id)
                     
                     if security_data:
-                        # Extract all available data
-                        ltp = float(security_data.get('last_price', 0))
+                        # Extract data with multiple field name possibilities
+                        ltp = float(security_data.get('last_price', 
+                                   security_data.get('ltp', 
+                                   security_data.get('lastPrice', 0))))
                         
                         # OHLC Data
                         ohlc = security_data.get('ohlc', {})
@@ -184,22 +204,21 @@ def fetch_market_data():
                         prev_close = float(ohlc.get('close', 0))
                         
                         # Volume & OI Data
-                        volume = int(security_data.get('volume', 0))
-                        oi = int(security_data.get('oi', 0))
+                        volume = int(security_data.get('volume', 
+                                    security_data.get('traded_volume', 0)))
+                        oi = int(security_data.get('oi', 
+                                security_data.get('open_interest', 0)))
                         
                         # Other Data
-                        buy_qty = int(security_data.get('buy_quantity', 0))
-                        sell_qty = int(security_data.get('sell_quantity', 0))
-                        net_change = float(security_data.get('net_change', 0))
+                        buy_qty = int(security_data.get('buy_quantity', 
+                                     security_data.get('buyQty', 0)))
+                        sell_qty = int(security_data.get('sell_quantity', 
+                                      security_data.get('sellQty', 0)))
                         
                         if ltp > 0:
-                            # Calculate change percentage
                             change_pct = calculate_change(ltp, prev_close)
-                            
-                            # Update previous prices
                             previous_prices[security_id] = ltp
                             
-                            # Emoji based on change
                             if change_pct > 0:
                                 emoji = "🟢"
                                 change_text = f"+{change_pct:.2f}%"
@@ -210,19 +229,16 @@ def fetch_market_data():
                                 emoji = "⚪"
                                 change_text = "0.00%"
                             
-                            # Build detailed message
                             commodity_msg = [
                                 f"\n{emoji} <b>{commodity_name}</b>",
                                 f"├ LTP: {format_price(ltp)} ({change_text})",
                             ]
                             
-                            # Add OHLC if available
                             if open_price > 0 or high_price > 0 or low_price > 0:
                                 commodity_msg.append(
                                     f"├ O: {format_price(open_price)} | H: {format_price(high_price)} | L: {format_price(low_price)}"
                                 )
                             
-                            # Add Volume and OI if available
                             if volume > 0 or oi > 0:
                                 vol_oi_line = "├"
                                 if volume > 0:
@@ -233,7 +249,6 @@ def fetch_market_data():
                                     vol_oi_line += f" OI: {format_number(oi)}"
                                 commodity_msg.append(vol_oi_line)
                             
-                            # Add Buy/Sell quantities
                             if buy_qty > 0 or sell_qty > 0:
                                 commodity_msg.append(f"└ Buy: {format_number(buy_qty)} | Sell: {format_number(sell_qty)}")
                             else:
@@ -241,22 +256,19 @@ def fetch_market_data():
                             
                             message_lines.extend(commodity_msg)
                             
-                            # Console output
                             print(f"\n{emoji} {commodity_name}")
                             print(f"  LTP: {format_price(ltp):12s} | Change: {change_text:8s}")
                             if open_price > 0:
                                 print(f"  O: {format_price(open_price):10s} H: {format_price(high_price):10s} L: {format_price(low_price):10s}")
-                            if volume > 0 or oi > 0:
-                                print(f"  Vol: {format_number(volume):15s} | OI: {format_number(oi)}")
                             
                             success_count += 1
                         else:
-                            print(f"⚪ {commodity_name:15s}: No LTP data")
+                            print(f"⚪ {commodity_name:15s}: No LTP data (LTP={ltp})")
                     else:
                         print(f"⚠️ {commodity_name:15s}: Not found in response")
             else:
-                print("⚠️ No MCX_COM data in response")
-                print(f"Response keys: {data.get('data', {}).keys() if 'data' in data else 'No data key'}")
+                print("⚠️ Could not find MCX data in any expected structure")
+                print(f"Response structure: {list(data.keys()) if isinstance(data, dict) else type(data)}")
         
         elif response.status_code == 429:
             error_msg = "⚠️ Rate limit exceeded. Waiting longer..."
@@ -290,15 +302,12 @@ def fetch_market_data():
         print(error_msg)
         send_telegram_message(error_msg)
         
-    except requests.exceptions.RequestException as e:
-        error_msg = f"❌ Network error: {str(e)}"
-        print(error_msg)
-        send_telegram_message(error_msg)
-        
     except Exception as e:
         error_msg = f"❌ Unexpected error: {str(e)}"
         print(error_msg)
         print(f"Full error: {repr(e)}")
+        import traceback
+        traceback.print_exc()
         send_telegram_message(error_msg)
 
 def send_startup_message():
@@ -341,18 +350,15 @@ def main():
     global bot_running
     
     print("\n" + "="*70)
-    print("🚀 MCX COMMODITIES MARKET DATA TRACKER")
+    print("🚀 MCX COMMODITIES MARKET DATA TRACKER - FIXED VERSION")
     print("="*70)
     print(f"📊 Tracking: {len(MCX_COMMODITIES)} commodities")
     print(f"⏱️  Update: Every {UPDATE_INTERVAL} seconds")
-    print(f"📈 Data: LTP, OHLC, Volume, OI, Buy/Sell")
-    print(f"🔌 Using: Direct REST API (No SDK issues!)")
+    print(f"📈 Enhanced debugging enabled")
     print("="*70 + "\n")
     
-    # Validate credentials
     if DHAN_CLIENT_ID == "YOUR_DHAN_CLIENT_ID":
         print("❌ ERROR: Set DHAN_CLIENT_ID!")
-        print("Get from: https://web.dhan.co → Profile → Access DhanHQ APIs")
         return
     
     if DHAN_ACCESS_TOKEN == "YOUR_DHAN_ACCESS_TOKEN":
@@ -362,27 +368,19 @@ def main():
     if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         print("⚠️ WARNING: Telegram not configured")
     
-    # Test DhanHQ connection
     print("🔄 Testing DhanHQ connection...\n")
     if not validate_credentials():
         print("\n❌ Cannot connect to DhanHQ!")
-        print("Please check:")
-        print("  1. Your access token is valid")
-        print("  2. Data API subscription (₹499/month) is active")
-        print("  3. Internet connection is working")
         return
     
-    # Send startup notification
     print("\n")
     send_startup_message()
     
     print("\n✅ Bot is running! Press Ctrl+C to stop.\n")
     
-    # Start scheduler thread
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
     
-    # Keep main thread alive
     try:
         while True:
             time.sleep(1)
